@@ -6,12 +6,14 @@
 #else
 #include <cv_bridge/cv_bridge.h>
 #endif
+#include "tf2/LinearMath/Transform.h"
 #include <image_transport/camera_subscriber.hpp>
 #include <image_transport/image_transport.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
+
 #include <tf2_ros/transform_broadcaster.h>
 
 // apriltag
@@ -63,7 +65,7 @@ descr(const std::string& description, const bool& read_only = false)
 void getPose(const matd_t& H,
              const Mat3& Pinv,
              geometry_msgs::msg::Transform& t,
-             const double size)
+             const double size, const bool inverse = false)
 {
     // compute extrinsic camera parameter
     // https://dsp.stackexchange.com/a/2737/31703
@@ -81,9 +83,18 @@ void getPose(const matd_t& H,
 
     // the corner coordinates of the tag in the canonical frame are (+/-1, +/-1)
     // hence the scale is half of the edge size
-    const Eigen::Vector3d tt = T.rightCols<1>() / ((T.col(0).norm() + T.col(0).norm()) / 2.0) * (size / 2.0);
+    Eigen::Vector3d tt = T.rightCols<1>() / ((T.col(0).norm() + T.col(0).norm()) / 2.0) * (size / 2.0);
+
+    // Return the inverse transformation, if desired.
+    if(inverse) {
+        R.transposeInPlace();
+        tt = -R * tt;
+    }
+
+    std::cout << tt << "\n";
 
     const Eigen::Quaterniond q(R);
+
 
     t.translation.x = tt.x();
     t.translation.y = tt.y();
@@ -114,6 +125,7 @@ private:
     std::atomic<bool> profile;
     std::unordered_map<int, std::string> tag_frames;
     std::unordered_map<int, double> tag_sizes;
+    const bool tf_child{false};
 
     std::function<void(apriltag_family_t*)> tf_destructor;
 
@@ -134,9 +146,11 @@ AprilTagNode::AprilTagNode(const rclcpp::NodeOptions& options)
     // parameter
     cb_parameter(add_on_set_parameters_callback(std::bind(&AprilTagNode::onParameter, this, std::placeholders::_1))),
     td(apriltag_detector_create()),
+    tf_child{declare_parameter("tf2_child", false)},// Get info on whether camera is child or parent in tf2
     // topics
     sub_cam(image_transport::create_camera_subscription(this, "image_rect", std::bind(&AprilTagNode::onCamera, this, std::placeholders::_1, std::placeholders::_2), declare_parameter("image_transport", "raw", descr({}, true)), rmw_qos_profile_sensor_data)),
     pub_detections(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("detections", rclcpp::QoS(1))),
+
     tf_broadcaster(this)
 {
     // read-only parameters
@@ -243,11 +257,23 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
 
         // 3D orientation and position
         geometry_msgs::msg::TransformStamped tf;
-        tf.header = msg_img->header;
-        // set child frame name by generic tag name or configured tag name
-        tf.child_frame_id = tag_frames.count(det->id) ? tag_frames.at(det->id) : std::string(det->family->name) + ":" + std::to_string(det->id);
-        getPose(*(det->H), Pinv, tf.transform, tag_sizes.count(det->id) ? tag_sizes.at(det->id) : tag_edge_size);
 
+
+        tf.header = msg_img->header;
+        // set tag frame name by generic tag name or configured tag name
+        auto frame_id = tag_frames.count(det->id) ? tag_frames.at(det->id) : std::string(det->family->name) + ":" + std::to_string(det->id);
+        getPose(*(det->H), Pinv, tf.transform, tag_sizes.count(det->id) ? tag_sizes.at(det->id) : tag_edge_size, tf_child);
+
+        if(tf_child) {
+            tf.header.frame_id = frame_id;
+            tf.child_frame_id = "camera";
+        }
+        else {
+            tf.child_frame_id = frame_id;
+        }
+
+        if(tf_child) {
+        }
         tfs.push_back(tf);
     }
 
