@@ -6,7 +6,7 @@
 #else
 #include <cv_bridge/cv_bridge.h>
 #endif
-#include "tf2/LinearMath/Transform.h"
+
 #include <image_transport/camera_subscriber.hpp>
 #include <image_transport/image_transport.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -91,8 +91,6 @@ void getPose(const matd_t& H,
         tt = -R * tt;
     }
 
-    std::cout << tt << "\n";
-
     const Eigen::Quaterniond q(R);
 
 
@@ -104,7 +102,6 @@ void getPose(const matd_t& H,
     t.rotation.y = q.y();
     t.rotation.z = q.z();
 }
-
 
 class AprilTagNode : public rclcpp::Node {
 public:
@@ -146,7 +143,7 @@ AprilTagNode::AprilTagNode(const rclcpp::NodeOptions& options)
     // parameter
     cb_parameter(add_on_set_parameters_callback(std::bind(&AprilTagNode::onParameter, this, std::placeholders::_1))),
     td(apriltag_detector_create()),
-    tf_child{declare_parameter("tf2_child", false)},// Get info on whether camera is child or parent in tf2
+    tf_child{declare_parameter("tf_child", false)},// Get info on whether camera is child or parent in tf2
     // topics
     sub_cam(image_transport::create_camera_subscription(this, "image_rect", std::bind(&AprilTagNode::onCamera, this, std::placeholders::_1, std::placeholders::_2), declare_parameter("image_transport", "raw", descr({}, true)), rmw_qos_profile_sensor_data)),
     pub_detections(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("detections", rclcpp::QoS(1))),
@@ -272,8 +269,6 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
             tf.child_frame_id = frame_id;
         }
 
-        if(tf_child) {
-        }
         tfs.push_back(tf);
     }
 
